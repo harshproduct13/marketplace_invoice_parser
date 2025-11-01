@@ -150,25 +150,25 @@ def call_openai_vision(image: Image.Image):
             messages=[
                 {"role": "user", "content": [
                     {"type": "text", "text": PROMPT.strip()},
-                    {"type": "image_url", "image_url": f"data:image/png;base64,{img_b64}"}
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
                 ]}
             ],
             temperature=0,
-            max_tokens=1500
+            max_output_tokens=1500
         )
         return response.choices[0].message.content
     except Exception:
-        # fallback to full GPT-4o if mini unavailable
+        # fallback to gpt-4o if mini unavailable
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "user", "content": [
                     {"type": "text", "text": PROMPT.strip()},
-                    {"type": "image_url", "image_url": f"data:image/png;base64,{img_b64}"}
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
                 ]}
             ],
             temperature=0,
-            max_tokens=1500
+            max_output_tokens=1500
         )
         return response.choices[0].message.content
 
