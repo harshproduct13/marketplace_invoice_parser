@@ -1,6 +1,6 @@
 # app.py
 import streamlit as st
-import openai
+from openai import OpenAI
 import sqlite3
 import pandas as pd
 import json
@@ -14,10 +14,10 @@ import traceback
 # ---------------- CONFIG ----------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-    st.warning("⚠️ Please set OPENAI_API_KEY in your environment or Streamlit secrets.")
-openai.api_key = OPENAI_API_KEY
+    st.warning("⚠️ Please set OPENAI_API_KEY in Streamlit secrets or environment variables.")
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # can also use "gpt-4o"
+client = OpenAI(api_key=OPENAI_API_KEY)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 DB_PATH = "invoices.db"
 
 # ---------------- DATABASE SETUP ----------------
@@ -135,7 +135,7 @@ def fetch_all_rows(limit=500):
 
 
 def image_to_base64(image: Image.Image) -> str:
-    """Convert a PIL image to base64 for OpenAI API"""
+    """Convert a PIL image to base64 string for OpenAI API"""
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
@@ -145,7 +145,7 @@ def call_openai_vision(image: Image.Image):
     """Send image to OpenAI Vision model"""
     img_b64 = image_to_base64(image)
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "user", "content": [
@@ -156,10 +156,10 @@ def call_openai_vision(image: Image.Image):
             temperature=0,
             max_tokens=1500
         )
-        return response["choices"][0]["message"]["content"]
-    except Exception as e:
-        # fallback to gpt-4o if mini unavailable
-        response = openai.ChatCompletion.create(
+        return response.choices[0].message.content
+    except Exception:
+        # fallback to full GPT-4o if mini unavailable
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "user", "content": [
@@ -170,7 +170,7 @@ def call_openai_vision(image: Image.Image):
             temperature=0,
             max_tokens=1500
         )
-        return response["choices"][0]["message"]["content"]
+        return response.choices[0].message.content
 
 
 # ---------------- STREAMLIT UI ----------------
@@ -189,7 +189,7 @@ if parse_button:
     if not uploaded_file:
         st.warning("Please upload an image first.")
     elif not OPENAI_API_KEY:
-        st.error("Set your OPENAI_API_KEY in environment variables or Streamlit Secrets.")
+        st.error("Set your OPENAI_API_KEY in Streamlit Secrets or environment.")
     else:
         try:
             image = Image.open(uploaded_file).convert("RGB")
@@ -222,8 +222,8 @@ else:
 st.markdown("""
 ---
 ### Notes
-- Uses **GPT-4o Vision** — no pytesseract or external OCR needed.  
-- Works natively on **Streamlit Cloud**.  
-- Each invoice service row is stored separately in SQLite (`invoices.db`).  
-- Add your `OPENAI_API_KEY` in Streamlit → Settings → Secrets.
+- Uses **GPT-4o Vision** — no pytesseract or external OCR needed  
+- Works natively on **Streamlit Cloud**  
+- Each service line from the invoice is saved in `invoices.db`  
+- Add your `OPENAI_API_KEY` under Streamlit → Settings → Secrets
 """)
