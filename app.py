@@ -126,6 +126,14 @@ def insert_rows(rows):
     conn.commit()
 
 
+def delete_row(row_id):
+    try:
+        cur.execute("DELETE FROM invoice_line_items WHERE id = ?", (row_id,))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Failed to delete row: {e}")
+
+
 def fetch_all_rows(limit=500):
     return pd.read_sql_query(
         "SELECT * FROM invoice_line_items ORDER BY created_at DESC LIMIT ?",
@@ -154,11 +162,10 @@ def call_openai_vision(image: Image.Image):
                 ]}
             ],
             temperature=0,
-            max_tokens=1500  # ✅ fixed name
+            max_tokens=1500
         )
         return response.choices[0].message.content
     except Exception:
-        # fallback to gpt-4o if mini unavailable
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -168,7 +175,7 @@ def call_openai_vision(image: Image.Image):
                 ]}
             ],
             temperature=0,
-            max_tokens=1500  # ✅ fixed name
+            max_tokens=1500
         )
         return response.choices[0].message.content
 
@@ -196,12 +203,9 @@ if parse_button:
             with st.spinner("🔍 Sending image to OpenAI Vision..."):
                 llm_output = call_openai_vision(image)
 
-            st.subheader("Model Output (Raw)")
-            st.code(llm_output[:2000])
-
             parsed = extract_json(llm_output)
             if not parsed:
-                st.error("❌ Could not parse valid JSON. Check model output above.")
+                st.error("❌ Could not parse valid JSON. Try again or check the image.")
             else:
                 insert_rows(parsed)
                 st.success(f"✅ Parsed and saved {len(parsed)} line items successfully!")
@@ -217,13 +221,17 @@ df = fetch_all_rows()
 if df.empty:
     st.info("No records yet. Upload an invoice to begin.")
 else:
-    st.dataframe(df, use_container_width=True)
-
-st.markdown("""
----
-### Notes
-- Uses **GPT-4o Vision** — no pytesseract or external OCR needed  
-- Works natively on **Streamlit Cloud**  
-- Each service line from the invoice is saved in `invoices.db`  
-- Add your `OPENAI_API_KEY` under Streamlit → Settings → Secrets
-""")
+    # Create a delete button for each row
+    for _, row in df.iterrows():
+        cols = st.columns([1, 1.2, 1.2, 1.2, 1.2, 2, 1.2, 1.2, 0.3])
+        cols[0].write(f"**{row['marketplace_name'] or ''}**")
+        cols[1].write(row['invoice_type'])
+        cols[2].write(row['invoice_date'])
+        cols[3].write(row['place_of_supply'])
+        cols[4].write(row['gstin'])
+        cols[5].write(row['service_description'])
+        cols[6].write(row['net_taxable_value'])
+        cols[7].write(row['total_amount'])
+        if cols[8].button("🗑️", key=f"delete_{row['id']}"):
+            delete_row(row["id"])
+            st.experimental_rerun()
