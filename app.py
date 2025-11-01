@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from openai import OpenAI
 import sqlite3
@@ -40,7 +39,7 @@ CREATE TABLE IF NOT EXISTS invoice_line_items (
 """)
 conn.commit()
 
-# ---------------- PROMPT TEMPLATE ----------------
+# ---------------- PROMPT ----------------
 PROMPT = """
 You are given an image of an invoice or credit note from Amazon or Flipkart.
 Extract and return all the line items as a JSON array.
@@ -63,18 +62,10 @@ JSON keys for each object:
     "Total Amount": number | string | null
   }
 ]
-
-Guidelines:
-- Identify invoice type from document heading ("Tax Invoice", "Credit Note", etc.)
-- Include one object per service row (e.g. Pick & Pack Fee, Shipping Fee)
-- Use percentage format for tax rate (e.g. "18%" or "9%+9%")
-- Include total values as shown in invoice currency
-- Return valid JSON only, nothing else.
 """
 
 # ---------------- HELPERS ----------------
 def extract_json(text):
-    """Extract JSON array from LLM output"""
     try:
         return json.loads(text)
     except Exception:
@@ -104,90 +95,64 @@ def sanitize_number(value):
 
 def insert_rows(rows):
     for r in rows:
-        try:
-            cur.execute("""
-                INSERT INTO invoice_line_items
-                (marketplace_name, invoice_type, invoice_date, place_of_supply, gstin,
-                 service_description, net_taxable_value, total_tax_rate, total_amount)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                r.get("Marketplace Name"),
-                r.get("Types of Invoice"),
-                r.get("Date of Invoice/Credit Note"),
-                r.get("Place of Supply"),
-                r.get("GSTIN"),
-                r.get("Service Description"),
-                sanitize_number(r.get("Net Taxable Value")),
-                r.get("Total Tax Rate"),
-                sanitize_number(r.get("Total Amount")),
-            ))
-        except Exception as e:
-            st.error(f"DB insert failed: {e}")
+        cur.execute("""
+            INSERT INTO invoice_line_items
+            (marketplace_name, invoice_type, invoice_date, place_of_supply, gstin,
+             service_description, net_taxable_value, total_tax_rate, total_amount)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            r.get("Marketplace Name"),
+            r.get("Types of Invoice"),
+            r.get("Date of Invoice/Credit Note"),
+            r.get("Place of Supply"),
+            r.get("GSTIN"),
+            r.get("Service Description"),
+            sanitize_number(r.get("Net Taxable Value")),
+            r.get("Total Tax Rate"),
+            sanitize_number(r.get("Total Amount")),
+        ))
     conn.commit()
 
 
 def delete_row(row_id):
-    try:
-        cur.execute("DELETE FROM invoice_line_items WHERE id = ?", (row_id,))
-        conn.commit()
-    except Exception as e:
-        st.error(f"Failed to delete row: {e}")
+    cur.execute("DELETE FROM invoice_line_items WHERE id = ?", (row_id,))
+    conn.commit()
 
 
-def fetch_all_rows(limit=500):
+def fetch_all_rows():
     return pd.read_sql_query(
-        "SELECT * FROM invoice_line_items ORDER BY created_at DESC LIMIT ?",
-        conn,
-        params=(limit,)
+        "SELECT id, marketplace_name, invoice_type, invoice_date, place_of_supply, gstin, "
+        "service_description, net_taxable_value, total_tax_rate, total_amount FROM invoice_line_items "
+        "ORDER BY created_at DESC",
+        conn
     )
 
 
 def image_to_base64(image: Image.Image) -> str:
-    """Convert a PIL image to base64 string for OpenAI API"""
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
 
 def call_openai_vision(image: Image.Image):
-    """Send image to OpenAI Vision model"""
     img_b64 = image_to_base64(image)
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "user", "content": [
-                    {"type": "text", "text": PROMPT.strip()},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                ]}
-            ],
-            temperature=0,
-            max_tokens=1500
-        )
-        return response.choices[0].message.content
-    except Exception:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "user", "content": [
-                    {"type": "text", "text": PROMPT.strip()},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                ]}
-            ],
-            temperature=0,
-            max_tokens=1500
-        )
-        return response.choices[0].message.content
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[
+            {"role": "user", "content": [
+                {"type": "text", "text": PROMPT.strip()},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+            ]}
+        ],
+        temperature=0,
+        max_tokens=1500
+    )
+    return response.choices[0].message.content
 
 
 # ---------------- STREAMLIT UI ----------------
 st.set_page_config(page_title="Marketplace Invoice Parser", layout="wide")
 st.title("🧾 Marketplace Invoice Parser (Amazon & Flipkart)")
-
-st.markdown("""
-Upload **one invoice image (JPG/PNG)**.  
-The app sends it to **OpenAI Vision (GPT-4o)** which reads and extracts structured data automatically — no OCR engine required.
-""")
 
 uploaded_file = st.file_uploader("Upload Invoice Image", type=["jpg", "jpeg", "png"])
 parse_button = st.button("Parse & Save Data")
@@ -200,9 +165,8 @@ if parse_button:
     else:
         try:
             image = Image.open(uploaded_file).convert("RGB")
-            with st.spinner("🔍 Sending image to OpenAI Vision..."):
+            with st.spinner("🔍 Processing image..."):
                 llm_output = call_openai_vision(image)
-
             parsed = extract_json(llm_output)
             if not parsed:
                 st.error("❌ Could not parse valid JSON. Try again or check the image.")
@@ -218,20 +182,38 @@ st.markdown("---")
 st.subheader("📊 Stored Invoice Line Items")
 
 df = fetch_all_rows()
+
 if df.empty:
     st.info("No records yet. Upload an invoice to begin.")
 else:
-    # Create a delete button for each row
-    for _, row in df.iterrows():
-        cols = st.columns([1, 1.2, 1.2, 1.2, 1.2, 2, 1.2, 1.2, 0.3])
-        cols[0].write(f"**{row['marketplace_name'] or ''}**")
-        cols[1].write(row['invoice_type'])
-        cols[2].write(row['invoice_date'])
-        cols[3].write(row['place_of_supply'])
-        cols[4].write(row['gstin'])
-        cols[5].write(row['service_description'])
-        cols[6].write(row['net_taxable_value'])
-        cols[7].write(row['total_amount'])
-        if cols[8].button("🗑️", key=f"delete_{row['id']}"):
-            delete_row(row["id"])
-            st.rerun()
+    # Add delete buttons
+    st.markdown("### 💾 Download Table as CSV")
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="⬇️ Download CSV",
+        data=csv,
+        file_name="invoice_data.csv",
+        mime="text/csv",
+    )
+
+    # Display table with borders and headers
+    st.markdown("### 📋 All Parsed Line Items")
+
+    # Add Delete column to table
+    for i in range(len(df)):
+        col1, col2 = st.columns([12, 1])
+        with col1:
+            st.markdown(
+                df.iloc[i : i + 1]
+                .drop(columns=["id"])
+                .style.set_table_styles(
+                    [{"selector": "table", "props": [("border", "1px solid #444")]}]
+                )
+                .hide(axis="index")
+                .to_html(),
+                unsafe_allow_html=True,
+            )
+        with col2:
+            if st.button("🗑️", key=f"delete_{df.loc[i, 'id']}"):
+                delete_row(df.loc[i, "id"])
+                st.rerun()
