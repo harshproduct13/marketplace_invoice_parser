@@ -6,9 +6,7 @@ import sqlite3
 import json
 import re
 import os
-from datetime import datetime
 import pandas as pd
-import io
 import traceback
 import openai
 
@@ -22,7 +20,7 @@ openai.api_key = OPENAI_API_KEY
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 DB_PATH = "invoices.db"
-MAX_OCR_CHARS = 40000  # Trim large OCR text for token efficiency
+MAX_OCR_CHARS = 40000  # Limit OCR text for token efficiency
 
 # ---------- DATABASE SETUP ----------
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -89,7 +87,6 @@ def extract_json_from_text(text):
         return json.loads(text)
     except:
         pass
-
     match = re.search(r"\[.*\]", text, re.S)
     if match:
         try:
@@ -186,7 +183,7 @@ st.title("🧾 Marketplace Invoice Parser (Amazon & Flipkart)")
 st.markdown(
     """
 Upload **one invoice image (JPG/PNG)** at a time.  
-This app will:
+The app will:
 1. Run OCR using Tesseract  
 2. Send extracted text to OpenAI  
 3. Parse all service line-items into structured data  
@@ -197,10 +194,6 @@ This app will:
 uploaded_file = st.file_uploader("Upload Invoice Image", type=["jpg", "jpeg", "png"])
 parse_button = st.button("Parse & Save Data")
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Invoice", use_container_width=True)
-
 if parse_button:
     if not uploaded_file:
         st.warning("Please upload an image first.")
@@ -209,6 +202,7 @@ if parse_button:
     else:
         with st.spinner("🧠 Running OCR and sending to OpenAI..."):
             try:
+                image = Image.open(uploaded_file).convert("RGB")
                 ocr_text = pytesseract.image_to_string(image)
                 ocr_text = ocr_text[:MAX_OCR_CHARS]
                 if not ocr_text.strip():
