@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from openai import OpenAI
 import sqlite3
@@ -187,25 +186,34 @@ df = fetch_all_rows()
 if df.empty:
     st.info("No records yet. Upload an invoice to begin.")
 else:
-    # create two columns: main table (wide) and narrow column for delete buttons
+    # Layout: main table (wide) + narrow column for delete buttons
     col_table, col_buttons = st.columns([18, 1])
 
-    # Prepare and display DataFrame (remove 'id' column from visible table)
-    df_display = df.copy()
-    df_display_visible = df_display.drop(columns=["id"])
-    # show with headers and borders - st.dataframe handles basic styling
-    with col_table:
-        st.dataframe(df_display_visible, use_container_width=True, hide_index=True)
+    df_display = df.drop(columns=["id"])
 
-    # Right column: a vertical stack of delete buttons that align with table rows
+    with col_table:
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+    # Align smaller trash icons next to each row
     with col_buttons:
-        # Add some top padding so buttons appear vertically aligned beneath header
-        st.write("")  # small spacer
-        # Iterate over the same DF order and render one button per row
+        # add padding to align first icon with first row
+        st.markdown("<div style='margin-top: 32px;'></div>", unsafe_allow_html=True)
         for _, row in df.iterrows():
-            # each button key unique
             btn_key = f"delete_{row['id']}"
-            # show a small button with trash icon; label is empty to show just icon
+            st.markdown(
+                f"""
+                <style>
+                div[data-testid="stButton"] button[{btn_key}] {{
+                    padding: 0;
+                    font-size: 14px;
+                    width: 28px;
+                    height: 28px;
+                    text-align: center;
+                }}
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
             if st.button("🗑️", key=btn_key):
                 delete_row(row["id"])
                 st.rerun()
