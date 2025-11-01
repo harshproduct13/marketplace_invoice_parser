@@ -32,40 +32,89 @@ CREATE TABLE IF NOT EXISTS invoice_line_items (
     gstin TEXT,
     service_description TEXT,
     net_taxable_value REAL,
-    total_tax_rate TEXT,
+    total_IGST_amount REAL,
+    total_CGST_amount REAL,
+    total_SGST_amount REAL,
     total_amount REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """)
 conn.commit()
 
-# ---------------- PROMPT ----------------
-PROMPT = """
-You are given an image of an invoice or credit note from Amazon or Flipkart.
-Extract and return all the line items as a JSON array.
-Each object should represent one service row from the invoice or credit note.
+# ---------------- PROMPTS ----------------
 
-Return STRICT JSON ONLY (no markdown, no explanation).
-If any field is missing, set it to null.
+FLIPKART_PROMPT = """
+You are analyzing an image of a Flipkart invoice or credit note.
 
-JSON keys for each object:
+Flipkart invoices are horizontally structured: each row represents one service or fee with its tax values.
+Extract all line items and return them as a JSON array.
+
+Each JSON object must have:
 [
   {
-    "Marketplace Name": string | null,
-    "Types of Invoice": "Tax Invoice" | "Credit Note" | "Commercial Credit Note" | string,
-    "Date of Invoice/Credit Note": string | null,
-    "Place of Supply": string | null,
-    "GSTIN": string | null,
-    "Service Description": string,
-    "Net Taxable Value": number | string | null,
-    "Total Tax Rate": string | null,
-    "Total Amount": number | string | null
+    "Marketplace Name": "Flipkart",
+    "Types of Invoice": "Tax Invoice" | "Credit Note" | "Commercial Credit Note",
+    "Date of Invoice/Credit Note": "DD-MM-YYYY",
+    "Place of Supply": "STATE, IN-XX",
+    "GSTIN": "string or null",
+    "Service Description": "string",
+    "Net Taxable Value": number,
+    "total_IGST_amount": number or null,
+    "total_CGST_amount": number or null,
+    "total_SGST_amount": number or null,
+    "total_amount": number
   }
 ]
+
+Rules:
+- If IGST is applied, set CGST and SGST to null.
+- If CGST and SGST are applied, set IGST to null.
+- If it's a Credit Note, make all numeric values negative.
+- Return valid JSON only, with no markdown or explanation.
+"""
+
+AMAZON_PROMPT = """
+You are analyzing an image of an Amazon invoice or credit note.
+
+Amazon invoices are often vertically structured. Each service is followed by one or more tax rows (SGST, CGST, or IGST).
+Combine those into a single JSON object per service, summing the total correctly.
+
+For each service group:
+- Identify the service name (e.g., Shipping Fee, Pick & Pack Fee, FBA Fee).
+- Add up any tax amounts that follow it.
+- Compute:
+  Total Amount = Net Taxable Value + sum of tax amounts.
+- If the document is a credit note, all values should be negative.
+
+Return all services as an array of JSON objects with this exact schema:
+[
+  {
+    "Marketplace Name": "Amazon",
+    "Types of Invoice": "Tax Invoice" | "Credit Note",
+    "Date of Invoice/Credit Note": "DD-MM-YYYY",
+    "Place of Supply": "STATE, IN-XX",
+    "GSTIN": "string or null",
+    "Service Description": "string",
+    "Net Taxable Value": number,
+    "total_IGST_amount": number or null,
+    "total_CGST_amount": number or null,
+    "total_SGST_amount": number or null,
+    "total_amount": number
+  }
+]
+
+Rules:
+- Group SGST and CGST with their parent service.
+- If only IGST exists, set IGST field and leave others null.
+- If SGST and CGST exist, fill both and set IGST to null.
+- Do not include separate tax lines as services.
+- Return strict JSON only, no explanations.
 """
 
 # ---------------- HELPERS ----------------
+
 def extract_json(text):
+    """Extract JSON array from model output."""
     try:
         return json.loads(text)
     except Exception:
@@ -80,6 +129,7 @@ def extract_json(text):
 
 
 def sanitize_number(value):
+    """Convert numbers safely."""
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -94,12 +144,14 @@ def sanitize_number(value):
 
 
 def insert_rows(rows):
+    """Insert parsed rows into DB."""
     for r in rows:
         cur.execute("""
             INSERT INTO invoice_line_items
             (marketplace_name, invoice_type, invoice_date, place_of_supply, gstin,
-             service_description, net_taxable_value, total_tax_rate, total_amount)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             service_description, net_taxable_value, total_IGST_amount, total_CGST_amount,
+             total_SGST_amount, total_amount)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             r.get("Marketplace Name"),
             r.get("Types of Invoice"),
@@ -108,47 +160,63 @@ def insert_rows(rows):
             r.get("GSTIN"),
             r.get("Service Description"),
             sanitize_number(r.get("Net Taxable Value")),
-            r.get("Total Tax Rate"),
-            sanitize_number(r.get("Total Amount")),
+            sanitize_number(r.get("total_IGST_amount")),
+            sanitize_number(r.get("total_CGST_amount")),
+            sanitize_number(r.get("total_SGST_amount")),
+            sanitize_number(r.get("total_amount")),
         ))
     conn.commit()
 
 
 def delete_row(row_id):
+    """Delete a record from the table."""
     cur.execute("DELETE FROM invoice_line_items WHERE id = ?", (row_id,))
     conn.commit()
 
 
 def fetch_all_rows():
+    """Fetch all invoices from DB."""
     return pd.read_sql_query(
         "SELECT id, marketplace_name, invoice_type, invoice_date, place_of_supply, gstin, "
-        "service_description, net_taxable_value, total_tax_rate, total_amount "
+        "service_description, net_taxable_value, total_IGST_amount, total_CGST_amount, total_SGST_amount, total_amount "
         "FROM invoice_line_items ORDER BY created_at DESC",
         conn
     )
 
 
 def image_to_base64(image: Image.Image) -> str:
+    """Convert image to base64 for API call."""
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
 
-def call_openai_vision(image: Image.Image):
+def detect_marketplace_from_text(text):
+    """Identify if invoice is from Amazon or Flipkart."""
+    t = text.lower()
+    if "amazon" in t:
+        return "Amazon"
+    elif "flipkart" in t:
+        return "Flipkart"
+    else:
+        return "Unknown"
+
+
+def call_openai_vision(image: Image.Image, prompt):
+    """Send image + prompt to GPT-4o Vision."""
     img_b64 = image_to_base64(image)
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
             {"role": "user", "content": [
-                {"type": "text", "text": PROMPT.strip()},
+                {"type": "text", "text": prompt.strip()},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
             ]}
         ],
         temperature=0,
-        max_tokens=1500
+        max_tokens=1800
     )
     return response.choices[0].message.content
-
 
 # ---------------- STREAMLIT UI ----------------
 st.set_page_config(page_title="Marketplace Invoice Parser", layout="wide")
@@ -160,14 +228,27 @@ parse_button = st.button("Parse & Save Data")
 if parse_button:
     if not uploaded_file:
         st.warning("Please upload an image first.")
-    elif not OPENAI_API_KEY:
-        st.error("Set your OPENAI_API_KEY in Streamlit Secrets or environment.")
     else:
         try:
             image = Image.open(uploaded_file).convert("RGB")
-            with st.spinner("🔍 Processing image..."):
-                llm_output = call_openai_vision(image)
+            with st.spinner("🔍 Detecting marketplace..."):
+                text_preview = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": "Identify if this invoice is from Amazon or Flipkart. Return only the name."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_to_base64(image)}"}}
+                    ]}],
+                    temperature=0,
+                    max_tokens=50
+                )
+                detected_source = text_preview.choices[0].message.content.strip()
+
+            prompt = AMAZON_PROMPT if "amazon" in detected_source.lower() else FLIPKART_PROMPT
+
+            with st.spinner(f"🧠 Parsing {detected_source} invoice..."):
+                llm_output = call_openai_vision(image, prompt)
             parsed = extract_json(llm_output)
+
             if not parsed:
                 st.error("❌ Could not parse valid JSON. Try again or check the image.")
             else:
@@ -178,42 +259,30 @@ if parse_button:
             st.error(f"Error: {e}")
             st.error(traceback.format_exc())
 
+# ---------------- TABLE VIEW ----------------
 st.markdown("---")
 st.subheader("📊 Stored Invoice Line Items")
 
 df = fetch_all_rows()
-
 if df.empty:
     st.info("No records yet. Upload an invoice to begin.")
 else:
-    # Layout: main table (wide) + narrow column for delete buttons
     col_table, col_buttons = st.columns([18, 1])
 
-    df_display = df.drop(columns=["id"])
-
     with col_table:
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        st.download_button(
+            label="⬇️ Download as CSV",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name="invoice_data.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        st.dataframe(df.drop(columns=["id"]), use_container_width=True, hide_index=True)
 
-    # Align smaller trash icons next to each row
     with col_buttons:
-        # add padding to align first icon with first row
-        st.markdown("<div style='margin-top: 32px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-top: 35px;'></div>", unsafe_allow_html=True)
         for _, row in df.iterrows():
             btn_key = f"delete_{row['id']}"
-            st.markdown(
-                f"""
-                <style>
-                div[data-testid="stButton"] button[{btn_key}] {{
-                    padding: 0;
-                    font-size: 14px;
-                    width: 28px;
-                    height: 28px;
-                    text-align: center;
-                }}
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
             if st.button("🗑️", key=btn_key):
                 delete_row(row["id"])
                 st.rerun()
