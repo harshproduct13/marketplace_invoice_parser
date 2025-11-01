@@ -122,8 +122,8 @@ def delete_row(row_id):
 def fetch_all_rows():
     return pd.read_sql_query(
         "SELECT id, marketplace_name, invoice_type, invoice_date, place_of_supply, gstin, "
-        "service_description, net_taxable_value, total_tax_rate, total_amount FROM invoice_line_items "
-        "ORDER BY created_at DESC",
+        "service_description, net_taxable_value, total_tax_rate, total_amount "
+        "FROM invoice_line_items ORDER BY created_at DESC",
         conn
     )
 
@@ -186,34 +186,27 @@ df = fetch_all_rows()
 if df.empty:
     st.info("No records yet. Upload an invoice to begin.")
 else:
-    # Add delete buttons
-    st.markdown("### 💾 Download Table as CSV")
-    csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="⬇️ Download CSV",
-        data=csv,
+        label="⬇️ Download Table as CSV",
+        data=df.to_csv(index=False).encode("utf-8"),
         file_name="invoice_data.csv",
         mime="text/csv",
+        use_container_width=True
     )
 
-    # Display table with borders and headers
-    st.markdown("### 📋 All Parsed Line Items")
+    # Delete button column
+    df["Delete"] = df["id"].apply(lambda i: f"🗑️ Delete {i}")
 
-    # Add Delete column to table
-    for i in range(len(df)):
-        col1, col2 = st.columns([12, 1])
-        with col1:
-            st.markdown(
-                df.iloc[i : i + 1]
-                .drop(columns=["id"])
-                .style.set_table_styles(
-                    [{"selector": "table", "props": [("border", "1px solid #444")]}]
-                )
-                .hide(axis="index")
-                .to_html(),
-                unsafe_allow_html=True,
-            )
-        with col2:
-            if st.button("🗑️", key=f"delete_{df.loc[i, 'id']}"):
-                delete_row(df.loc[i, "id"])
-                st.rerun()
+    # Display bordered table with headers
+    st.dataframe(
+        df.drop(columns=["id"]),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # Handle row deletion
+    for i, row in df.iterrows():
+        delete_key = f"delete_{row['id']}"
+        if st.button("🗑️", key=delete_key):
+            delete_row(row["id"])
+            st.rerun()
