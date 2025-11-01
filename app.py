@@ -209,7 +209,7 @@ if parse_button:
             else:
                 insert_rows(parsed)
                 st.success(f"✅ Parsed and saved {len(parsed)} line items successfully!")
-                st.experimental_rerun()
+                st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")
             st.error(traceback.format_exc())
@@ -234,4 +234,4 @@ else:
         cols[7].write(row['total_amount'])
         if cols[8].button("🗑️", key=f"delete_{row['id']}"):
             delete_row(row["id"])
-            st.experimental_rerun()
+            st.rerun()
