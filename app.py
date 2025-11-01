@@ -154,7 +154,7 @@ def call_openai_vision(image: Image.Image):
                 ]}
             ],
             temperature=0,
-            max_output_tokens=1500
+            max_tokens=1500  # ✅ fixed name
         )
         return response.choices[0].message.content
     except Exception:
@@ -168,7 +168,7 @@ def call_openai_vision(image: Image.Image):
                 ]}
             ],
             temperature=0,
-            max_output_tokens=1500
+            max_tokens=1500  # ✅ fixed name
         )
         return response.choices[0].message.content
 
