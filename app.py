@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 from openai import OpenAI
 import sqlite3
@@ -186,27 +187,25 @@ df = fetch_all_rows()
 if df.empty:
     st.info("No records yet. Upload an invoice to begin.")
 else:
-    st.download_button(
-        label="⬇️ Download Table as CSV",
-        data=df.to_csv(index=False).encode("utf-8"),
-        file_name="invoice_data.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
+    # create two columns: main table (wide) and narrow column for delete buttons
+    col_table, col_buttons = st.columns([18, 1])
 
-    # Delete button column
-    df["Delete"] = df["id"].apply(lambda i: f"🗑️ Delete {i}")
+    # Prepare and display DataFrame (remove 'id' column from visible table)
+    df_display = df.copy()
+    df_display_visible = df_display.drop(columns=["id"])
+    # show with headers and borders - st.dataframe handles basic styling
+    with col_table:
+        st.dataframe(df_display_visible, use_container_width=True, hide_index=True)
 
-    # Display bordered table with headers
-    st.dataframe(
-        df.drop(columns=["id"]),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    # Handle row deletion
-    for i, row in df.iterrows():
-        delete_key = f"delete_{row['id']}"
-        if st.button("🗑️", key=delete_key):
-            delete_row(row["id"])
-            st.rerun()
+    # Right column: a vertical stack of delete buttons that align with table rows
+    with col_buttons:
+        # Add some top padding so buttons appear vertically aligned beneath header
+        st.write("")  # small spacer
+        # Iterate over the same DF order and render one button per row
+        for _, row in df.iterrows():
+            # each button key unique
+            btn_key = f"delete_{row['id']}"
+            # show a small button with trash icon; label is empty to show just icon
+            if st.button("🗑️", key=btn_key):
+                delete_row(row["id"])
+                st.rerun()
